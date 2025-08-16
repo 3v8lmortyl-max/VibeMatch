@@ -1,0 +1,183 @@
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Random Video Call</title>
+  <style>
+    body {
+      font-family: sans-serif;
+      margin: 0;
+      padding: 16px;
+      background: #f4f4f4;
+      text-align: center;
+    }
+    video {
+      width: 100%;
+      max-width: 360px;
+      margin: 10px 0;
+      border-radius: 8px;
+      box-shadow: 0 0 10px rgba(0,0,0,0.1);
+    }
+    input, button {
+      padding: 12px;
+      font-size: 16px;
+      width: 90%;
+      max-width: 300px;
+      margin: 10px auto;
+      display: block;
+      border: none;
+      border-radius: 8px;
+    }
+    button {
+      background-color: #007bff;
+      color: white;
+      cursor: pointer;
+    }
+    button:hover {
+      background-color: #0056b3;
+    }
+    h3 {
+      font-weight: normal;
+    }
+  </style>
+</head>
+<body>
+
+  <h2>🎥 Random Video Call</h2>
+  <h3>Room ID: <span id="roomId">(none)</span></h3>
+
+  <button id="createRoom">Create Room</button>
+  <input id="roomInput" placeholder="Enter Room ID" />
+  <button id="joinRoom">Join Room</button>
+
+  <video id="localVideo" autoplay playsinline muted></video>
+  <video id="remoteVideo" autoplay playsinline></video>
+
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-database.js"></script>
+
+  <script>
+    const firebaseConfig = {
+      apiKey: "AIzaSyBT0umyu-D_BC6KC_e07DhwqhbQB7dAs3Y",
+      authDomain: "randomvideochat-af8bb.firebaseapp.com",
+      databaseURL: "https://randomvideochat-af8bb-default-rtdb.asia-southeast1.firebasedatabase.app",
+      projectId: "randomvideochat-af8bb",
+      storageBucket: "randomvideochat-af8bb.appspot.com",
+      messagingSenderId: "162637738009",
+      appId: "1:162637738009:web:25decd4fb7ff1900cafa88"
+    };
+
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.database();
+
+    const iceConfig = {
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        {
+          urls: 'turn:openrelay.metered.ca:80',
+          username: 'openrelayproject',
+          credential: 'openrelayproject'
+        }
+      ]
+    };
+
+    const createBtn = document.getElementById('createRoom');
+    const joinBtn = document.getElementById('joinRoom');
+    const roomInput = document.getElementById('roomInput');
+    const roomIdSpan = document.getElementById('roomId');
+
+    const localVideo = document.getElementById('localVideo');
+    const remoteVideo = document.getElementById('remoteVideo');
+
+    let localStream, pc, roomRef;
+
+    async function initStream() {
+      localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      localVideo.srcObject = localStream;
+    }
+
+    async function createRoom() {
+      const roomId = Math.random().toString(36).substr(2, 9);
+      roomIdSpan.textContent = roomId;
+      roomInput.value = roomId;
+
+      roomRef = db.ref('rooms/' + roomId);
+      pc = createPeer();
+
+      localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+
+      await roomRef.set({ offer });
+
+      roomRef.on('value', async snapshot => {
+        const data = snapshot.val();
+        if (!pc.currentRemoteDescription && data?.answer) {
+          await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
+        }
+      });
+
+      roomRef.child('candidates2').on('child_added', async snap => {
+        if (snap.val()) {
+          try {
+            await pc.addIceCandidate(new RTCIceCandidate(snap.val()));
+          } catch (e) { console.error(e); }
+        }
+      });
+    }
+
+    async function joinRoom() {
+      const roomId = roomInput.value;
+      roomIdSpan.textContent = roomId;
+      roomRef = db.ref('rooms/' + roomId);
+
+      const roomData = (await roomRef.once('value')).val();
+      if (!roomData?.offer) return alert('Room not found');
+
+      pc = createPeer();
+      localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+
+      await pc.setRemoteDescription(new RTCSessionDescription(roomData.offer));
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      await roomRef.update({ answer });
+
+      roomRef.child('candidates').on('child_added', async snap => {
+        if (snap.val()) {
+          try {
+            await pc.addIceCandidate(new RTCIceCandidate(snap.val()));
+          } catch (e) { console.error(e); }
+        }
+      });
+    }
+
+    function createPeer() {
+      const peer = new RTCPeerConnection(iceConfig);
+
+      peer.onicecandidate = event => {
+        if (event.candidate && roomRef) {
+          const path = roomRef.child(peer.localDescription.type === 'offer' ? 'candidates' : 'candidates2');
+          path.push(event.candidate.toJSON());
+        }
+      };
+
+      peer.ontrack = event => {
+        remoteVideo.srcObject = event.streams[0];
+      };
+
+      return peer;
+    }
+
+    createBtn.onclick = async () => {
+      await initStream();
+      await createRoom();
+    };
+
+    joinBtn.onclick = async () => {
+      await initStream();
+      await joinRoom();
+    };
+  </script>
+</body>
+</html>
